@@ -190,6 +190,14 @@
   .loading-dot { display: inline-block; animation: pulse 1.2s infinite; }
   @keyframes pulse { 0%,100%{opacity:.3} 50%{opacity:1} }
 
+  /* MINDMAP */
+  #mindmap-container { background: var(--sand); }
+  #mindmap-svg { cursor: grab; }
+  #mindmap-svg:active { cursor: grabbing; }
+  .mm-node { cursor: pointer; transition: filter 0.15s; }
+  .mm-node:hover { filter: brightness(1.08); }
+  .mm-node rect { rx: 8; }
+
   ::-webkit-scrollbar { width: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 2px; }
@@ -209,6 +217,11 @@
   </div>
   <div id="sidebar-footer">
     <button class="btn-new" onclick="openModal()">+ Nieuw hoofdstuk</button>
+    <button class="btn-api" onclick="exportData()">↓ Exporteer data</button>
+    <label class="btn-api" style="cursor:pointer;text-align:center;">
+      ↑ Importeer data
+      <input type="file" accept=".json" onchange="importData(event)" style="display:none">
+    </label>
     <button class="btn-api" onclick="showApi()">API-sleutel wijzigen</button>
   </div>
 </div>
@@ -229,6 +242,9 @@
       </button>
       <button class="layer-tab" onclick="showLayer('notities')" id="tab-notities">
         <span class="layer-dot" id="dot-notities"></span>Eigen notities
+      </button>
+      <button class="layer-tab" onclick="showLayer('mindmap')" id="tab-mindmap">
+        <span class="layer-dot" id="dot-mindmap"></span>Mindmap
       </button>
       <button class="layer-tab" onclick="showLayer('chat')" id="tab-chat">
         <span class="layer-dot" id="dot-chat"></span>Vragen stellen
@@ -292,6 +308,22 @@
       <div class="notes-footer">
         <span class="char-count" id="notes-chars">0 tekens</span>
         <button class="btn-save" style="background:var(--amber);color:white;" onclick="saveNotes()">Opslaan</button>
+      </div>
+    </div>
+
+    <!-- MINDMAP -->
+    <div class="layer-panel" id="layer-mindmap" style="background:var(--cream);">
+      <div class="gen-toolbar">
+        <button class="btn-gen" id="btn-gen-map" onclick="generateMindmap()">Genereer mindmap</button>
+        <button class="btn-clear-gen" onclick="clearMindmap()">wis</button>
+        <span class="gen-saved" id="map-saved">Opgeslagen ✓</span>
+        <span style="font-size:11px;color:var(--bark-light);opacity:0.6;margin-left:auto;">Klik op een knoop om in te zoomen · scroll om te navigeren</span>
+      </div>
+      <div id="mindmap-container" style="flex:1;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;">
+        <div id="mindmap-empty" style="font-size:13px;color:var(--bark-light);font-style:italic;opacity:0.6;text-align:center;">
+          Nog geen mindmap. Klik op "Genereer mindmap" om een visueel overzicht te maken van je stof.
+        </div>
+        <svg id="mindmap-svg" style="display:none;width:100%;height:100%;"></svg>
       </div>
     </div>
 
@@ -370,6 +402,36 @@ function showApi() { document.getElementById('api-input').value = apiKey; showAp
 
 // ─── PERSIST ───
 function persist() { localStorage.setItem('skv3_chapters', JSON.stringify(chapters)); }
+
+// ─── EXPORT / IMPORT ───
+function exportData() {
+  const data = localStorage.getItem('skv3_chapters') || '[]';
+  const blob = new Blob([data], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'sukhiveda_backup_' + new Date().toISOString().slice(0,10) + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = JSON.parse(e.target.result);
+      if (!Array.isArray(data)) throw new Error('Ongeldig formaat');
+      localStorage.setItem('skv3_chapters', JSON.stringify(data));
+      alert('✓ Data succesvol geïmporteerd! (' + data.length + ' hoofdstukken)');
+      location.reload();
+    } catch(err) {
+      alert('Fout bij importeren: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+}
 function getChapter() { return chapters.find(c => c.id === activeId); }
 
 // ─── CHAPTERS ───
@@ -408,6 +470,7 @@ function selectChapter(id) {
 
   setGenContent('samenvatting', ch.samenvatting || '');
   setGenContent('begrippen', ch.begrippen || '');
+  loadMindmap(ch);
   document.getElementById('chat-messages').innerHTML = '';
 
   updateDots();
@@ -418,10 +481,12 @@ function selectChapter(id) {
 function updateDots() {
   const ch = getChapter();
   if (!ch) return;
-  ['origineel','samenvatting','begrippen','notities'].forEach(l => {
+  ['origineel','samenvatting','begrippen','notities','mindmap'].forEach(l => {
     const tab = document.getElementById('tab-' + l);
+    if (!tab) return;
     const hasContent = l === 'origineel' ? !!(ch.orig) :
                        l === 'notities' ? !!(ch.notes) :
+                       l === 'mindmap' ? !!(ch.mindmap) :
                        !!(ch[l]);
     if (hasContent) tab.classList.add('has-content');
     else tab.classList.remove('has-content');
@@ -449,7 +514,7 @@ function createChapter() {
   const title = document.getElementById('new-ch-title').value.trim();
   if (!title) return;
   const cat = document.getElementById('new-ch-cat').value;
-  const ch = { id: 'ch_'+Date.now(), title, cat, orig:'', notes:'', samenvatting:'', begrippen:'' };
+  const ch = { id: 'ch_'+Date.now(), title, cat, orig:'', notes:'', samenvatting:'', begrippen:'', mindmap:'' };
   chapters.push(ch);
   persist();
   closeModal();
@@ -462,8 +527,17 @@ function showLayer(name) {
   activeLayer = name;
   document.querySelectorAll('.layer-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.layer-panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('tab-' + name).classList.add('active');
-  document.getElementById('layer-' + name).classList.add('active');
+  const tab = document.getElementById('tab-' + name);
+  const panel = document.getElementById('layer-' + name);
+  if (tab) tab.classList.add('active');
+  if (panel) panel.classList.add('active');
+  // Re-render mindmap when switching to it (so SVG has correct dimensions)
+  if (name === 'mindmap') {
+    const ch = getChapter();
+    if (ch && ch.mindmap) {
+      setTimeout(() => { try { renderMindmap(JSON.parse(ch.mindmap)); } catch(e){} }, 50);
+    }
+  }
 }
 
 // ─── ORIGINEEL ───
@@ -570,8 +644,32 @@ async function generate(type) {
   contentEl.innerHTML = '<span class="loading-dot">Genereren...</span>';
 
   const systems = {
-    samenvatting: `Je bent een Ayurvedische studiehulp voor een eerstejaars AP®-student aan Eisra in Nederland. Schrijf een heldere, gestructureerde samenvatting van het aangeboden materiaal. Gebruik kopjes en subkopjes. Sluit af met een sectie "Kernpunten om te onthouden" (3-5 punten). Schrijf in het Nederlands. Baseer je uitsluitend op het aangeboden materiaal.\n\nHoofdstuk: ${ch.title}`,
-    begrippen: `Je bent een Ayurvedische studiehulp voor een eerstejaars AP®-student aan Eisra in Nederland. Maak een complete begrippenlijst van alle Ayurvedische en Sanskrit termen in het materiaal. Formaat per term: **Term** — definitie in 1-2 zinnen. Sorteer alfabetisch. Schrijf definities in het Nederlands. Baseer je uitsluitend op het aangeboden materiaal.\n\nHoofdstuk: ${ch.title}`
+    samenvatting: `Je bent een Ayurvedische studiehulp voor een eerstejaars AP®-student aan Eisra in Nederland. Herschrijf het aangeboden materiaal als een volledig, ADHD-vriendelijk studiedocument. Laat GEEN inhoud weg — alle concepten, voorbeelden, uitleg en details moeten behouden blijven. Het gaat om betere leesbaarheid en structuur, niet om inkorten.
+
+OPMAAKREGELS (strikt volgen):
+- Gebruik ## voor hoofdsecties met beschrijvende titels
+- Gebruik ### voor subsecties
+- Gebruik **vetgedrukt** voor sleuteltermen en belangrijke concepten
+- Gebruik *cursief* voor Sanskrit termen of Latijnse namen
+- Gebruik - voor opsommingen (één punt per regel)
+- Laat een witregel tussen secties
+- Schrijf volledige zinnen waar nodig voor begrip
+- Sluit af met ## Kernpunten voor het tentamen (alle belangrijke punten, vetgedrukt)
+- Schrijf in het Nederlands
+- Baseer je uitsluitend op het aangeboden materiaal
+
+Hoofdstuk: ${ch.title}`,
+    begrippen: `Je bent een studiehulp voor een eerstejaars AP®-student aan Eisra in Nederland. Maak een complete, ADHD-vriendelijke begrippenlijst van alle vakinhoudelijke termen in het materiaal — zowel Ayurvedische, Sanskrit, medische, anatomische als fysiologische termen.
+
+OPMAAKREGELS (strikt volgen):
+- Groepeer termen onder ## thematische kopjes (bijv. ## Anatomie, ## Fysiologie, ## Dosha's, ## Sanskrit begrippen, ## Aandoeningen)
+- Elke term op een nieuwe regel: **Term** — definitie in 1-2 zinnen
+- Gebruik *cursief* voor Sanskrit vertalingen of Latijnse namen
+- Sorteer alfabetisch binnen elke groep
+- Schrijf definities in het Nederlands
+- Baseer je uitsluitend op het aangeboden materiaal
+
+Hoofdstuk: ${ch.title}`
   };
 
   try {
@@ -633,19 +731,268 @@ async function sendChat() {
 function esc(t) { return String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
 function formatText(text) {
-  return esc(text)
-    .replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')
-    .replace(/\*(.*?)\*/g,'<em>$1</em>')
-    .replace(/^### (.+)$/gm,'<strong style="display:block;margin:12px 0 3px;color:var(--bark)">$1</strong>')
-    .replace(/^## (.+)$/gm,'<strong style="display:block;margin:14px 0 4px;font-size:15px;color:var(--bark)">$1</strong>')
-    .replace(/^# (.+)$/gm,'<strong style="display:block;margin:16px 0 6px;font-size:16px;color:var(--bark)">$1</strong>')
-    .replace(/^- (.+)$/gm,'<div style="padding-left:14px;margin:2px 0">· $1</div>')
-    .replace(/\n\n+/g,'</p><p style="margin:7px 0 0">')
-    .replace(/\n/g,'<br>')
-    .replace(/^/,'<p style="margin:0">').replace(/$/,'</p>');
+  // Process line by line for better control
+  const lines = text.split('\n');
+  let html = '';
+  let inList = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i];
+
+    // Escape HTML first
+    const escLine = (s) => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+    // Apply inline formatting
+    const inline = (s) => escLine(s)
+      .replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g,'<em style="color:var(--bark-light)">$1</em>');
+
+    // H1
+    if (line.startsWith('# ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h2 style="font-family:'Cormorant Garamond',serif;font-size:20px;font-weight:600;color:var(--bark);margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid var(--terra-light)">${inline(line.slice(2))}</h2>`;
+    }
+    // H2
+    else if (line.startsWith('## ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h3 style="font-family:'Cormorant Garamond',serif;font-size:17px;font-weight:600;color:var(--terra-dark);margin:18px 0 6px">${inline(line.slice(3))}</h3>`;
+    }
+    // H3
+    else if (line.startsWith('### ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<h4 style="font-size:14px;font-weight:600;color:var(--bark);margin:14px 0 4px;text-transform:uppercase;letter-spacing:0.05em">${inline(line.slice(4))}</h4>`;
+    }
+    // List item
+    else if (line.startsWith('- ') || line.startsWith('* ')) {
+      if (!inList) { html += '<ul style="margin:6px 0 6px 0;padding:0;list-style:none">'; inList = true; }
+      html += `<li style="padding:3px 0 3px 18px;position:relative;line-height:1.55"><span style="position:absolute;left:4px;color:var(--terra)">·</span>${inline(line.slice(2))}</li>`;
+    }
+    // Empty line
+    else if (line.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += '<div style="height:8px"></div>';
+    }
+    // Normal paragraph
+    else {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<p style="margin:0 0 6px;line-height:1.65">${inline(line)}</p>`;
+    }
+  }
+
+  if (inList) html += '</ul>';
+  return `<div style="font-size:14px;color:var(--ink)">${html}</div>`;
 }
 
-document.addEventListener('keydown', e => {
+// ─── MINDMAP ───
+async function generateMindmap() {
+  const ch = getChapter();
+  if (!ch || !ch.orig) { alert('Sla eerst je originele tekst op voordat je genereert.'); return; }
+  if (isLoading) return;
+  isLoading = true;
+
+  const btn = document.getElementById('btn-gen-map');
+  btn.disabled = true;
+  btn.textContent = 'Genereren...';
+  document.getElementById('mindmap-empty').style.display = 'flex';
+  document.getElementById('mindmap-empty').textContent = 'Mindmap wordt gegenereerd...';
+  document.getElementById('mindmap-svg').style.display = 'none';
+
+  const system = `Je bent een studiehulp voor een eerstejaars AP®-student. Maak een mindmap-structuur van het aangeboden studiemateriaal.
+
+Geef je antwoord UITSLUITEND als geldig JSON in dit formaat, zonder uitleg of markdown eromheen:
+{
+  "center": "Hoofdtitel",
+  "branches": [
+    {
+      "label": "Hoofdthema 1",
+      "color": "#C17F4A",
+      "children": ["Subpunt A", "Subpunt B", "Subpunt C"]
+    },
+    {
+      "label": "Hoofdthema 2",
+      "color": "#4A7C59",
+      "children": ["Subpunt D", "Subpunt E"]
+    }
+  ]
+}
+
+Regels:
+- Maximaal 7 hoofdthema's (branches)
+- Maximaal 5 kinderen per branch
+- Labels kort en krachtig (max 5 woorden)
+- Gebruik variërende kleuren: #C17F4A, #4A7C59, #3D6B8C, #8C6B2A, #7C4A6B, #4A6B7C, #6B7C4A
+- Geef de echte hoofdtitel als center
+- Schrijf in het Nederlands`;
+
+  try {
+    const raw = await callAPI(system, ch.orig.slice(0, 8000));
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const data = JSON.parse(clean);
+    renderMindmap(data);
+    const c = getChapter();
+    if (c) { c.mindmap = JSON.stringify(data); persist(); updateDots(); }
+    const pill = document.getElementById('map-saved');
+    pill.style.display = 'inline';
+    setTimeout(() => pill.style.display = 'none', 2000);
+  } catch(e) {
+    document.getElementById('mindmap-empty').textContent = 'Fout bij genereren: ' + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Genereer mindmap';
+  isLoading = false;
+}
+
+function clearMindmap() {
+  const c = getChapter();
+  if (c) { c.mindmap = ''; persist(); updateDots(); }
+  document.getElementById('mindmap-svg').style.display = 'none';
+  document.getElementById('mindmap-empty').style.display = 'flex';
+  document.getElementById('mindmap-empty').textContent = 'Nog geen mindmap. Klik op "Genereer mindmap" om een visueel overzicht te maken van je stof.';
+}
+
+function renderMindmap(data) {
+  const svg = document.getElementById('mindmap-svg');
+  const container = document.getElementById('mindmap-container');
+  const W = container.clientWidth || 900;
+  const H = container.clientHeight || 600;
+  svg.innerHTML = '';
+  svg.style.display = 'block';
+  document.getElementById('mindmap-empty').style.display = 'none';
+
+  const cx = W / 2, cy = H / 2;
+  const branches = data.branches || [];
+  const n = branches.length;
+
+  // Pan/zoom state
+  let panX = 0, panY = 0, scale = 1, dragging = false, lastX = 0, lastY = 0;
+  const g = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+  svg.appendChild(g);
+
+  function applyTransform() {
+    g.setAttribute('transform', `translate(${panX},${panY}) scale(${scale})`);
+  }
+
+  svg.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
+  svg.addEventListener('mousemove', e => {
+    if (!dragging) return;
+    panX += e.clientX - lastX; panY += e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    applyTransform();
+  });
+  svg.addEventListener('mouseup', () => dragging = false);
+  svg.addEventListener('mouseleave', () => dragging = false);
+  svg.addEventListener('wheel', e => {
+    e.preventDefault();
+    scale = Math.max(0.4, Math.min(2, scale - e.deltaY * 0.001));
+    applyTransform();
+  }, { passive: false });
+
+  function makeText(parent, text, x, y, fontSize, fill, bold) {
+    const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', x); t.setAttribute('y', y);
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('dominant-baseline', 'middle');
+    t.setAttribute('font-family', bold ? "'Cormorant Garamond', serif" : "'DM Sans', sans-serif");
+    t.setAttribute('font-size', fontSize);
+    t.setAttribute('font-weight', bold ? '600' : '400');
+    t.setAttribute('fill', fill);
+    t.setAttribute('pointer-events', 'none');
+    // Word wrap
+    const words = text.split(' ');
+    const lineH = fontSize * 1.3;
+    let lines = [], current = '';
+    for (const w of words) {
+      const test = current ? current + ' ' + w : w;
+      if (test.length > 16 && current) { lines.push(current); current = w; }
+      else current = test;
+    }
+    if (current) lines.push(current);
+    const startY = y - ((lines.length - 1) * lineH) / 2;
+    lines.forEach((line, i) => {
+      const ts = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+      ts.setAttribute('x', x); ts.setAttribute('dy', i === 0 ? startY - y : lineH);
+      ts.textContent = line;
+      t.appendChild(ts);
+    });
+    parent.appendChild(t);
+    return lines.length;
+  }
+
+  function makeRoundRect(parent, x, y, w, h, r, fill, stroke) {
+    const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    rect.setAttribute('x', x - w/2); rect.setAttribute('y', y - h/2);
+    rect.setAttribute('width', w); rect.setAttribute('height', h);
+    rect.setAttribute('rx', r);
+    rect.setAttribute('fill', fill);
+    rect.setAttribute('stroke', stroke);
+    rect.setAttribute('stroke-width', '1.5');
+    parent.appendChild(rect);
+  }
+
+  function makeLine(parent, x1, y1, x2, y2, color) {
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    const mx = (x1 + x2) / 2;
+    line.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('fill', 'none');
+    line.setAttribute('opacity', '0.5');
+    parent.appendChild(line);
+  }
+
+  // Draw center node
+  const centerR = 70;
+  makeRoundRect(g, cx, cy, centerR * 2, 60, 12, '#5C3D2E', '#3D2010');
+  makeText(g, data.center || 'Mindmap', cx, cy, 14, '#FBF7F0', true);
+
+  // Draw branches
+  branches.forEach((branch, i) => {
+    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const branchR = 200;
+    const bx = cx + Math.cos(angle) * branchR;
+    const by = cy + Math.sin(angle) * branchR;
+    const color = branch.color || '#C17F4A';
+    const lightColor = color + '22';
+
+    makeLine(g, cx, cy, bx, by, color);
+    makeRoundRect(g, bx, by, 140, 44, 8, color, color);
+    makeText(g, branch.label, bx, by, 12, '#FFFDF9', true);
+
+    // Draw children
+    const children = branch.children || [];
+    children.forEach((child, j) => {
+      const childAngle = angle + (j - (children.length - 1) / 2) * 0.35;
+      const childR = 340;
+      const chx = cx + Math.cos(childAngle) * childR;
+      const chy = cy + Math.sin(childAngle) * childR;
+
+      makeLine(g, bx, by, chx, chy, color);
+      makeRoundRect(g, chx, chy, 130, 36, 6, lightColor, color);
+      makeText(g, child, chx, chy, 11, '#2C1F14', false);
+    });
+  });
+}
+
+function loadMindmap(ch) {
+  const svg = document.getElementById('mindmap-svg');
+  const empty = document.getElementById('mindmap-empty');
+  if (ch && ch.mindmap) {
+    try {
+      renderMindmap(JSON.parse(ch.mindmap));
+    } catch(e) {
+      svg.style.display = 'none';
+      empty.style.display = 'flex';
+      empty.textContent = 'Nog geen mindmap.';
+    }
+  } else {
+    svg.style.display = 'none';
+    empty.style.display = 'flex';
+    empty.textContent = 'Nog geen mindmap. Klik op "Genereer mindmap" om een visueel overzicht te maken van je stof.';
+  }
+}
+
+
   if ((e.ctrlKey||e.metaKey) && e.key==='s') {
     e.preventDefault();
     if (activeLayer === 'origineel') saveOrig();
