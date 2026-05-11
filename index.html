@@ -407,12 +407,6 @@ function saveApiKey() {
   if (v) { apiKey = v; localStorage.setItem('skv3_key', v); }
   hideApiOverlay();
 }
-  const v = document.getElementById('api-input').value.trim();
-  if (!v.startsWith('sk-')) { alert('Voer een geldige API-sleutel in (begint met sk-).'); return; }
-  apiKey = v;
-  localStorage.setItem('skv3_api', apiKey);
-  hideApiOverlay();
-}
 function showApi() { document.getElementById('api-input').value = apiKey; showApiOverlay(); }
 
 // ─── PERSIST ───
@@ -1007,7 +1001,7 @@ function loadMindmap(ch) {
   }
 }
 
-
+document.addEventListener('keydown', e => {
   if ((e.ctrlKey||e.metaKey) && e.key==='s') {
     e.preventDefault();
     if (activeLayer === 'origineel') saveOrig();
