@@ -394,8 +394,7 @@ function init() {
     } catch(e) { console.error('Embed error', e); }
   }
   try { chapters = JSON.parse(existing || '[]'); } catch(e) { chapters = []; }
-  if (!apiKey && chapters.length === 0) showApiOverlay();
-  else hideApiOverlay();
+  hideApiOverlay();
   renderChapters();
 }
 
@@ -632,7 +631,15 @@ function clearGen(type) {
 }
 
 // ─── API ───
-async function callAPI(system, userMsg) {
+async function callAPI(systemPrompt, userMessage) {
+  if (!apiKey) {
+    alert('Voer eerst een API-sleutel in via "API-sleutel wijzigen" links onderin om AI-functies te gebruiken.');
+    throw new Error('No API key');
+  }
+  return _callAPI(systemPrompt, userMessage);
+}
+
+async function _callAPI(system, userMsg) {
   if (!apiKey) { showApiOverlay(); throw new Error('Geen API-sleutel'); }
   const res = await fetch('https://morning-limit-d10bsukhiveda-proxy.parmiladevi.workers.dev', {
     method: 'POST',
