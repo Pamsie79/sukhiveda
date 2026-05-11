@@ -246,6 +246,9 @@
       <button class="layer-tab" onclick="showLayer('mindmap')" id="tab-mindmap">
         <span class="layer-dot" id="dot-mindmap"></span>Mindmap
       </button>
+      <button class="layer-tab" onclick="showLayer('flashcards')" id="tab-flashcards">
+        <span class="layer-dot" id="dot-flashcards"></span>Flashcards
+      </button>
       <button class="layer-tab" onclick="showLayer('chat')" id="tab-chat">
         <span class="layer-dot" id="dot-chat"></span>Vragen stellen
       </button>
@@ -308,6 +311,32 @@
       <div class="notes-footer">
         <span class="char-count" id="notes-chars">0 tekens</span>
         <button class="btn-save" style="background:var(--amber);color:white;" onclick="saveNotes()">Opslaan</button>
+      </div>
+    </div>
+
+    <!-- FLASHCARDS -->
+    <div class="layer-panel" id="layer-flashcards" style="background:var(--cream);">
+      <div class="gen-toolbar">
+        <button class="btn-gen" id="btn-gen-cards" onclick="generateFlashcards()">Genereer flashcards</button>
+        <button class="btn-clear-gen" onclick="clearFlashcards()">wis</button>
+        <button class="btn-clear-gen" onclick="shuffleFlashcards()">↻ shuffle</button>
+        <span class="gen-saved" id="cards-saved">Opgeslagen ✓</span>
+        <span style="font-size:11px;color:var(--bark-light);opacity:0.6;margin-left:auto;" id="card-counter"></span>
+      </div>
+      <div id="flashcard-container" style="flex:1;overflow:hidden;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;">
+        <div id="flashcard-empty" style="font-size:13px;color:var(--bark-light);font-style:italic;opacity:0.6;text-align:center;">
+          Nog geen flashcards. Klik op "Genereer flashcards" om kaartjes te maken van je stof.
+        </div>
+        <div id="flashcard-display" style="display:none;width:100%;max-width:560px;flex:1;flex-direction:column;align-items:center;justify-content:center;gap:24px;">
+          <div id="flashcard" style="width:100%;min-height:280px;background:white;border:2px solid var(--terra-light);border-radius:16px;padding:32px;display:flex;align-items:center;justify-content:center;text-align:center;cursor:pointer;box-shadow:0 4px 12px rgba(92,61,46,0.08);transition:all 0.2s;font-size:18px;line-height:1.5;">
+            <div id="flashcard-text">Klik om te beginnen</div>
+          </div>
+          <div style="display:flex;gap:12px;align-items:center;">
+            <button onclick="prevCard()" class="btn-gen" style="padding:10px 20px;">← Vorige</button>
+            <button onclick="flipCard()" class="btn-gen" style="padding:10px 20px;background:var(--terra);">Draai om</button>
+            <button onclick="nextCard()" class="btn-gen" style="padding:10px 20px;">Volgende →</button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -480,6 +509,7 @@ function selectChapter(id) {
   setGenContent('samenvatting', ch.samenvatting || '');
   setGenContent('begrippen', ch.begrippen || '');
   loadMindmap(ch);
+  loadFlashcards();
   document.getElementById('chat-messages').innerHTML = '';
 
   updateDots();
@@ -490,12 +520,13 @@ function selectChapter(id) {
 function updateDots() {
   const ch = getChapter();
   if (!ch) return;
-  ['origineel','samenvatting','begrippen','notities','mindmap'].forEach(l => {
+  ['origineel','samenvatting','begrippen','notities','mindmap','flashcards'].forEach(l => {
     const tab = document.getElementById('tab-' + l);
     if (!tab) return;
     const hasContent = l === 'origineel' ? !!(ch.orig) :
                        l === 'notities' ? !!(ch.notes) :
                        l === 'mindmap' ? !!(ch.mindmap) :
+                       l === 'flashcards' ? !!(ch.flashcards) :
                        !!(ch[l]);
     if (hasContent) tab.classList.add('has-content');
     else tab.classList.remove('has-content');
@@ -792,6 +823,140 @@ function formatText(text) {
   return `<div style="font-size:14px;color:var(--ink)">${html}</div>`;
 }
 
+// ─── FLASHCARDS ───
+let cardIndex = 0;
+let cardFlipped = false;
+
+async function generateFlashcards() {
+  const ch = getChapter();
+  if (!ch || !ch.orig) { alert('Sla eerst je originele tekst op.'); return; }
+  if (isLoading) return;
+  isLoading = true;
+
+  const btn = document.getElementById('btn-gen-cards');
+  btn.disabled = true;
+  btn.textContent = 'Genereren...';
+  document.getElementById('flashcard-empty').style.display = 'flex';
+  document.getElementById('flashcard-empty').textContent = 'Flashcards worden gegenereerd...';
+  document.getElementById('flashcard-display').style.display = 'none';
+
+  const system = `Je bent een studiehulp voor een eerstejaars AP®-student. Maak flashcards (term → definitie) van het studiemateriaal.
+
+Geef je antwoord UITSLUITEND als geldig JSON-array, zonder uitleg of markdown:
+[
+  {"front": "Term of vraag", "back": "Korte heldere uitleg"},
+  {"front": "Andere term", "back": "Andere uitleg"}
+]
+
+Regels:
+- 15-30 kaartjes (afhankelijk van stof)
+- Front: kort (max 10 woorden) — een term, vraag of begrip
+- Back: helder antwoord (1-3 zinnen)
+- Focus op rijtjes, definities en kernconcepten die je uit je hoofd moet leren
+- Sanskrit termen op front met Nederlandse uitleg op back
+- Schrijf in het Nederlands`;
+
+  try {
+    const raw = await callAPI(system, ch.orig.slice(0, 10000));
+    const clean = raw.replace(/```json|```/g, '').trim();
+    const cards = JSON.parse(clean);
+    if (!Array.isArray(cards) || cards.length === 0) throw new Error('Geen kaartjes ontvangen');
+    const c = getChapter();
+    if (c) { c.flashcards = JSON.stringify(cards); persist(); updateDots(); }
+    cardIndex = 0;
+    cardFlipped = false;
+    showCard();
+    const pill = document.getElementById('cards-saved');
+    pill.style.display = 'inline';
+    setTimeout(() => pill.style.display = 'none', 2000);
+  } catch(e) {
+    document.getElementById('flashcard-empty').textContent = 'Fout bij genereren: ' + e.message;
+  }
+
+  btn.disabled = false;
+  btn.textContent = 'Genereer flashcards';
+  isLoading = false;
+}
+
+function getCards() {
+  const ch = getChapter();
+  if (!ch || !ch.flashcards) return [];
+  try { return JSON.parse(ch.flashcards); } catch(e) { return []; }
+}
+
+function showCard() {
+  const cards = getCards();
+  if (cards.length === 0) {
+    document.getElementById('flashcard-empty').style.display = 'flex';
+    document.getElementById('flashcard-display').style.display = 'none';
+    document.getElementById('card-counter').textContent = '';
+    return;
+  }
+  document.getElementById('flashcard-empty').style.display = 'none';
+  document.getElementById('flashcard-display').style.display = 'flex';
+  if (cardIndex >= cards.length) cardIndex = 0;
+  if (cardIndex < 0) cardIndex = cards.length - 1;
+  const card = cards[cardIndex];
+  const text = cardFlipped ? card.back : card.front;
+  const fc = document.getElementById('flashcard');
+  document.getElementById('flashcard-text').textContent = text;
+  fc.style.background = cardFlipped ? 'var(--sand)' : 'white';
+  document.getElementById('card-counter').textContent = `Kaart ${cardIndex + 1} van ${cards.length} ${cardFlipped ? '· antwoord' : '· vraag'}`;
+}
+
+function flipCard() {
+  cardFlipped = !cardFlipped;
+  showCard();
+}
+
+function nextCard() {
+  cardIndex++;
+  cardFlipped = false;
+  showCard();
+}
+
+function prevCard() {
+  cardIndex--;
+  cardFlipped = false;
+  showCard();
+}
+
+function shuffleFlashcards() {
+  const cards = getCards();
+  if (cards.length === 0) return;
+  for (let i = cards.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [cards[i], cards[j]] = [cards[j], cards[i]];
+  }
+  const ch = getChapter();
+  if (ch) { ch.flashcards = JSON.stringify(cards); persist(); }
+  cardIndex = 0;
+  cardFlipped = false;
+  showCard();
+}
+
+function clearFlashcards() {
+  const ch = getChapter();
+  if (ch) { ch.flashcards = ''; persist(); updateDots(); }
+  cardIndex = 0;
+  cardFlipped = false;
+  showCard();
+}
+
+function loadFlashcards() {
+  cardIndex = 0;
+  cardFlipped = false;
+  showCard();
+}
+
+// Click on card to flip
+document.addEventListener('DOMContentLoaded', () => {
+  setTimeout(() => {
+    const fc = document.getElementById('flashcard');
+    if (fc) fc.addEventListener('click', flipCard);
+  }, 500);
+});
+
 // ─── MINDMAP ───
 async function generateMindmap() {
   const ch = getChapter();
@@ -958,26 +1123,27 @@ function renderMindmap(data) {
   // Draw branches
   branches.forEach((branch, i) => {
     const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const branchR = 200;
+    const branchR = 280;
     const bx = cx + Math.cos(angle) * branchR;
     const by = cy + Math.sin(angle) * branchR;
     const color = branch.color || '#C17F4A';
     const lightColor = color + '22';
 
     makeLine(g, cx, cy, bx, by, color);
-    makeRoundRect(g, bx, by, 140, 44, 8, color, color);
+    makeRoundRect(g, bx, by, 150, 44, 8, color, color);
     makeText(g, branch.label, bx, by, 12, '#FFFDF9', true);
 
     // Draw children
     const children = branch.children || [];
+    const childSpread = Math.max(0.6, Math.min(1.4, children.length * 0.25));
     children.forEach((child, j) => {
-      const childAngle = angle + (j - (children.length - 1) / 2) * 0.35;
-      const childR = 340;
+      const childAngle = angle + (j - (children.length - 1) / 2) * (childSpread / Math.max(children.length, 1));
+      const childR = 480;
       const chx = cx + Math.cos(childAngle) * childR;
       const chy = cy + Math.sin(childAngle) * childR;
 
       makeLine(g, bx, by, chx, chy, color);
-      makeRoundRect(g, chx, chy, 130, 36, 6, lightColor, color);
+      makeRoundRect(g, chx, chy, 140, 38, 6, lightColor, color);
       makeText(g, child, chx, chy, 11, '#2C1F14', false);
     });
   });
