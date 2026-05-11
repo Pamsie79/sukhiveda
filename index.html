@@ -346,7 +346,20 @@
         <button class="btn-gen" id="btn-gen-map" onclick="generateMindmap()">Genereer mindmap</button>
         <button class="btn-clear-gen" onclick="clearMindmap()">wis</button>
         <span class="gen-saved" id="map-saved">Opgeslagen ✓</span>
-        <span style="font-size:11px;color:var(--bark-light);opacity:0.6;margin-left:auto;">Klik op een knoop om in te zoomen · scroll om te navigeren</span>
+        <span style="margin-left:auto;display:flex;gap:8px;align-items:center;font-size:11px;color:var(--bark-light);">
+          <label>Layout:
+            <select id="mm-layout" onchange="rerenderMindmap()" style="border:1px solid var(--terra-light);background:white;padding:3px 6px;border-radius:4px;font-size:11px;">
+              <option value="tree">Boom (horizontaal)</option>
+              <option value="radial">Radiaal</option>
+            </select>
+          </label>
+          <label>Niveau:
+            <select id="mm-depth" onchange="rerenderMindmap()" style="border:1px solid var(--terra-light);background:white;padding:3px 6px;border-radius:4px;font-size:11px;">
+              <option value="2">2 (met details)</option>
+              <option value="1">1 (alleen hoofdthema's)</option>
+            </select>
+          </label>
+        </span>
       </div>
       <div id="mindmap-container" style="flex:1;overflow:hidden;position:relative;display:flex;align-items:center;justify-content:center;">
         <div id="mindmap-empty" style="font-size:13px;color:var(--bark-light);font-style:italic;opacity:0.6;text-align:center;">
@@ -849,7 +862,7 @@ Geef je antwoord UITSLUITEND als geldig JSON-array, zonder uitleg of markdown:
 ]
 
 Regels:
-- 15-30 kaartjes (afhankelijk van stof)
+- Maak een kaartje voor ELKE belangrijke term, definitie, rijtje of concept — geen limiet
 - Front: kort (max 10 woorden) — een term, vraag of begrip
 - Back: helder antwoord (1-3 zinnen)
 - Focus op rijtjes, definities en kernconcepten die je uit je hoofd moet leren
@@ -1034,9 +1047,12 @@ function renderMindmap(data) {
   svg.style.display = 'block';
   document.getElementById('mindmap-empty').style.display = 'none';
 
-  const cx = W / 2, cy = H / 2;
+  const layoutSel = document.getElementById('mm-layout');
+  const depthSel = document.getElementById('mm-depth');
+  const layout = layoutSel ? layoutSel.value : 'tree';
+  const showChildren = depthSel ? depthSel.value === '2' : true;
+
   const branches = data.branches || [];
-  const n = branches.length;
 
   // Pan/zoom state
   let panX = 0, panY = 0, scale = 1, dragging = false, lastX = 0, lastY = 0;
@@ -1046,7 +1062,6 @@ function renderMindmap(data) {
   function applyTransform() {
     g.setAttribute('transform', `translate(${panX},${panY}) scale(${scale})`);
   }
-
   svg.addEventListener('mousedown', e => { dragging = true; lastX = e.clientX; lastY = e.clientY; });
   svg.addEventListener('mousemove', e => {
     if (!dragging) return;
@@ -1058,11 +1073,11 @@ function renderMindmap(data) {
   svg.addEventListener('mouseleave', () => dragging = false);
   svg.addEventListener('wheel', e => {
     e.preventDefault();
-    scale = Math.max(0.4, Math.min(2, scale - e.deltaY * 0.001));
+    scale = Math.max(0.3, Math.min(2.5, scale - e.deltaY * 0.001));
     applyTransform();
   }, { passive: false });
 
-  function makeText(parent, text, x, y, fontSize, fill, bold) {
+  function makeText(parent, text, x, y, fontSize, fill, bold, maxWidth) {
     const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
     t.setAttribute('x', x); t.setAttribute('y', y);
     t.setAttribute('text-anchor', 'middle');
@@ -1072,13 +1087,13 @@ function renderMindmap(data) {
     t.setAttribute('font-weight', bold ? '600' : '400');
     t.setAttribute('fill', fill);
     t.setAttribute('pointer-events', 'none');
-    // Word wrap
-    const words = text.split(' ');
-    const lineH = fontSize * 1.3;
+    const charsPerLine = Math.floor((maxWidth || 120) / (fontSize * 0.55));
+    const words = String(text).split(' ');
+    const lineH = fontSize * 1.25;
     let lines = [], current = '';
     for (const w of words) {
       const test = current ? current + ' ' + w : w;
-      if (test.length > 16 && current) { lines.push(current); current = w; }
+      if (test.length > charsPerLine && current) { lines.push(current); current = w; }
       else current = test;
     }
     if (current) lines.push(current);
@@ -1104,7 +1119,19 @@ function renderMindmap(data) {
     parent.appendChild(rect);
   }
 
-  function makeLine(parent, x1, y1, x2, y2, color) {
+  function makeStraightLine(parent, x1, y1, x2, y2, color) {
+    // L-shaped orthogonal line
+    const mx = x1 + (x2 - x1) * 0.5;
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    line.setAttribute('d', `M${x1},${y1} L${mx},${y1} L${mx},${y2} L${x2},${y2}`);
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '2');
+    line.setAttribute('fill', 'none');
+    line.setAttribute('opacity', '0.55');
+    parent.appendChild(line);
+  }
+
+  function makeCurvedLine(parent, x1, y1, x2, y2, color) {
     const line = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const mx = (x1 + x2) / 2;
     line.setAttribute('d', `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`);
@@ -1115,38 +1142,100 @@ function renderMindmap(data) {
     parent.appendChild(line);
   }
 
-  // Draw center node
-  const centerR = 70;
-  makeRoundRect(g, cx, cy, centerR * 2, 60, 12, '#5C3D2E', '#3D2010');
-  makeText(g, data.center || 'Mindmap', cx, cy, 14, '#FBF7F0', true);
-
-  // Draw branches
-  branches.forEach((branch, i) => {
-    const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const branchR = 280;
-    const bx = cx + Math.cos(angle) * branchR;
-    const by = cy + Math.sin(angle) * branchR;
-    const color = branch.color || '#C17F4A';
-    const lightColor = color + '22';
-
-    makeLine(g, cx, cy, bx, by, color);
-    makeRoundRect(g, bx, by, 150, 44, 8, color, color);
-    makeText(g, branch.label, bx, by, 12, '#FFFDF9', true);
-
-    // Draw children
-    const children = branch.children || [];
-    const childSpread = Math.max(0.6, Math.min(1.4, children.length * 0.25));
-    children.forEach((child, j) => {
-      const childAngle = angle + (j - (children.length - 1) / 2) * (childSpread / Math.max(children.length, 1));
-      const childR = 480;
-      const chx = cx + Math.cos(childAngle) * childR;
-      const chy = cy + Math.sin(childAngle) * childR;
-
-      makeLine(g, bx, by, chx, chy, color);
-      makeRoundRect(g, chx, chy, 140, 38, 6, lightColor, color);
-      makeText(g, child, chx, chy, 11, '#2C1F14', false);
+  if (layout === 'tree') {
+    // ─── HORIZONTAL TREE LAYOUT ───
+    // Calculate total height needed (sum of all rows)
+    const childRowH = 44;
+    const branchSpacing = 24;
+    const branches_visible = branches.map(b => ({...b, children: showChildren ? (b.children || []) : []}));
+    let totalRows = 0;
+    branches_visible.forEach(b => {
+      totalRows += Math.max(1, b.children.length);
     });
-  });
+    const totalH = totalRows * childRowH + branches_visible.length * branchSpacing;
+    const startY = -totalH / 2 + 200;
+    
+    const centerX = 100;
+    const branchX = 320;
+    const childX = 560;
+    
+    // Draw center
+    makeRoundRect(g, centerX, 200, 160, 60, 12, '#5C3D2E', '#3D2010');
+    makeText(g, data.center || 'Mindmap', centerX, 200, 14, '#FBF7F0', true, 140);
+
+    let cursorY = startY;
+    branches_visible.forEach((branch) => {
+      const color = branch.color || '#C17F4A';
+      const lightColor = color + '22';
+      const children = branch.children;
+      const branchHeight = Math.max(1, children.length) * childRowH;
+      const branchY = cursorY + branchHeight / 2;
+
+      // Line from center to branch
+      makeStraightLine(g, centerX + 80, 200, branchX - 90, branchY, color);
+      // Branch box
+      makeRoundRect(g, branchX, branchY, 180, 46, 8, color, color);
+      makeText(g, branch.label, branchX, branchY, 12, '#FFFDF9', true, 160);
+
+      // Children
+      children.forEach((child, j) => {
+        const chY = cursorY + j * childRowH + childRowH / 2;
+        makeStraightLine(g, branchX + 90, branchY, childX - 85, chY, color);
+        makeRoundRect(g, childX, chY, 170, 36, 6, lightColor, color);
+        makeText(g, child, childX, chY, 11, '#2C1F14', false, 155);
+      });
+
+      cursorY += branchHeight + branchSpacing;
+    });
+
+    // Initial centering
+    panX = (W - 720) / 2 - 40;
+    panY = (H - totalH) / 2 - 100;
+    if (totalH > H * 1.5) scale = Math.max(0.5, (H * 0.9) / totalH);
+    applyTransform();
+
+  } else {
+    // ─── RADIAL LAYOUT ───
+    const cx = W / 2, cy = H / 2;
+    const n = branches.length;
+    makeRoundRect(g, cx, cy, 160, 60, 12, '#5C3D2E', '#3D2010');
+    makeText(g, data.center || 'Mindmap', cx, cy, 14, '#FBF7F0', true, 140);
+
+    branches.forEach((branch, i) => {
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const branchR = 280;
+      const bx = cx + Math.cos(angle) * branchR;
+      const by = cy + Math.sin(angle) * branchR;
+      const color = branch.color || '#C17F4A';
+      const lightColor = color + '22';
+
+      makeCurvedLine(g, cx, cy, bx, by, color);
+      makeRoundRect(g, bx, by, 150, 44, 8, color, color);
+      makeText(g, branch.label, bx, by, 12, '#FFFDF9', true, 135);
+
+      if (showChildren) {
+        const children = branch.children || [];
+        const childCount = children.length;
+        const childSpread = Math.min(0.9, childCount * 0.18);
+        children.forEach((child, j) => {
+          const childAngle = angle + (j - (childCount - 1) / 2) * (childSpread / Math.max(childCount, 1));
+          const childR = 500;
+          const chx = cx + Math.cos(childAngle) * childR;
+          const chy = cy + Math.sin(childAngle) * childR;
+          makeCurvedLine(g, bx, by, chx, chy, color);
+          makeRoundRect(g, chx, chy, 140, 38, 6, lightColor, color);
+          makeText(g, child, chx, chy, 11, '#2C1F14', false, 125);
+        });
+      }
+    });
+  }
+}
+
+function rerenderMindmap() {
+  const ch = getChapter();
+  if (ch && ch.mindmap) {
+    try { renderMindmap(JSON.parse(ch.mindmap)); } catch(e) {}
+  }
 }
 
 function loadMindmap(ch) {
